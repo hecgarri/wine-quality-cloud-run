@@ -1,60 +1,151 @@
-# Parte 0 — Entrenamiento y serialización del modelo (Keras + Poetry)
+# Entrenamiento y experimentación
 
-Entrena una red neuronal en **Keras** que estima la **calidad** de un vino
-(escala 0–10) a partir de sus propiedades fisicoquímicas, y la serializa con el
-**formato nativo** `model.keras`.
+Esta carpeta contiene el entrenamiento reproducible del predictor de calidad de
+vino y el flujo opcional de optimización con Optuna y MLflow. El script principal
+genera el modelo Keras que consume la aplicación Streamlit.
 
-- **Dataset:** Wine Quality (UCI) — vinos tintos y blancos *Vinho Verde*.
-- **Descarga:** 100 % programática desde un enlace público: el script descarga los CSV directamente desde la URL de UCI.
-- **Reproducibilidad:** semilla `0` fijada en `random`, `numpy` y `tensorflow`.
+## Dataset
 
-## Alcance de la optimización
+`train.py` descarga automáticamente los archivos de vinos tintos y blancos del
+dataset Wine Quality de UCI. Cada observación contiene 11 mediciones
+fisicoquímicas, el tipo de vino y una calidad sensorial entre 0 y 10.
 
-Optuna y MLflow se utilizaron durante el desarrollo para comparar
-hiperparámetros y registrar los experimentos, tal como se trabajó en clases. Esta
-optimización es complementaria: la bondad de ajuste no es el foco de la
-evaluación y el comando principal sigue siendo un entrenamiento determinista que
-genera el modelo Keras requerido.
+El modelo utiliza 12 entradas:
 
-La búsqueda ejecutada consideró 10 trials. La configuración seleccionada obtuvo
-un MAE de validación de `0.5371` puntos antes del entrenamiento definitivo.
+1. Acidez fija.
+2. Acidez volátil.
+3. Ácido cítrico.
+4. Azúcar residual.
+5. Cloruros.
+6. Dióxido de azufre libre.
+7. Dióxido de azufre total.
+8. Densidad.
+9. pH.
+10. Sulfatos.
+11. Alcohol.
+12. Tipo de vino.
+
+## Partición y reproducibilidad
+
+El código fija la semilla `0` en Python, NumPy y TensorFlow. Una permutación
+reproducible divide las 6.497 observaciones en:
+
+- 4.159 filas de entrenamiento.
+- 1.039 filas de validación.
+- 1.299 filas de prueba.
+
+El conjunto de prueba permanece fuera de la búsqueda de hiperparámetros.
+
+## Arquitectura seleccionada
+
+```text
+12 entradas
+    |
+Normalización
+    |
+Dense(128, ReLU) + Dropout(0.2)
+    |
+Dense(64, ReLU) + Dropout(0.2)
+    |
+Dense(1, lineal)
+```
+
+La capa de normalización forma parte del archivo `model.keras`. La aplicación
+puede entregar valores originales sin reproducir transformaciones externas.
+
+Los hiperparámetros definitivos son:
+
+| Parámetro | Valor |
+| --- | ---: |
+| Primera capa | 128 unidades |
+| Segunda capa | 64 unidades |
+| Learning rate | 0.0008019358 |
+| Dropout | 0.2 |
+| Regularización L2 | 0.0006780227 |
+| Batch size | 32 |
 
 ## Requisitos
 
-- Python 3.12
-- [Poetry](https://python-poetry.org/) instalado.
+- Python 3.12.
+- Poetry, para ejecución directa.
+- Docker Desktop, como alternativa cuando Poetry no está instalado.
+- Conexión a internet para descargar el dataset la primera vez.
 
-## Comandos
+## Entrenar con Poetry
 
-```bash
-# 1. Instalar las dependencias de esta parte (entorno propio como buena práctica)
+Ejecuta desde `parte0/`:
+
+```powershell
 poetry install
-
-# 2. Entrenar y serializar el modelo
 poetry run python train.py
 ```
 
-## Experimentación opcional
+La ejecución muestra las métricas, guarda `../app/model.keras`, vuelve a cargar
+el archivo y realiza tres predicciones de comprobación.
 
-```bash
+## Entrenar sin Poetry mediante Docker
+
+Ejecuta desde la raíz del repositorio, no desde `parte0/`:
+
+```powershell
+docker run --rm `
+  -v "${PWD}:/workspace" -w /workspace/parte0 `
+  python:3.12-slim `
+  sh -c "pip install --quiet poetry && poetry config virtualenvs.create false && poetry install --no-interaction --no-ansi --no-root && poetry run python train.py"
+```
+
+El volumen permite que el contenedor escriba el modelo directamente en
+`app/model.keras`.
+
+## Ejecutar la búsqueda con Optuna
+
+Con Poetry, ejecuta desde `parte0/`:
+
+```powershell
 poetry run python optimize.py --trials 10
 ```
 
-Optuna conserva el estudio en `optuna.db`; MLflow almacena el seguimiento en
-`mlflow.db` y `mlruns/`. Estos artefactos de desarrollo no forman parte del ZIP
-de entrega.
+Puedes cambiar el número de trials y el máximo de épocas:
 
-Para explorar los runs de MLflow:
-
-```bash
-poetry run mlflow server --backend-store-uri sqlite:///mlflow.db --host 127.0.0.1 --port 5000
+```powershell
+poetry run python optimize.py --trials 20 --epochs 60
 ```
 
-La interfaz queda disponible en http://127.0.0.1:5000. Selecciona el experimento
-`wine-quality-optuna`, ordena por `val_mae` y utiliza **Compare** para contrastar
-parámetros, métricas y modelos.
+Sin Poetry, ejecuta desde `parte0/`:
 
-Para explorar el estudio de Optuna desde PowerShell:
+```powershell
+docker run --rm `
+  -v "${PWD}:/experiment" -w /experiment `
+  python:3.12-slim `
+  sh -c "pip install --quiet poetry && poetry config virtualenvs.create false && poetry install --no-interaction --no-ansi --no-root && poetry run python optimize.py --trials 10"
+```
+
+Optuna reutiliza `optuna.db` si existe. Cada nueva ejecución añade trials al
+estudio `wine-quality` en lugar de reemplazarlo.
+
+## Explorar MLflow
+
+La opción Docker funciona aunque Windows no tenga Poetry. Ejecuta desde
+`parte0/`:
+
+```powershell
+docker run --rm -p 127.0.0.1:5000:5000 `
+  -v "${PWD}:/experiment" -w /experiment `
+  ghcr.io/mlflow/mlflow:v3.14.0 `
+  mlflow server `
+  --backend-store-uri sqlite:////experiment/mlflow.db `
+  --default-artifact-root file:///experiment/mlruns `
+  --host 0.0.0.0 --port 5000
+```
+
+Abre http://127.0.0.1:5000 y selecciona `wine-quality-optuna`. Ordena por
+`val_mae`, compara trials y abre `model/model.keras` dentro de los artefactos.
+
+Detén el servidor con `Ctrl+C`.
+
+## Explorar Optuna Dashboard
+
+Ejecuta desde `parte0/`:
 
 ```powershell
 docker run --rm -p 127.0.0.1:8080:8080 `
@@ -62,17 +153,43 @@ docker run --rm -p 127.0.0.1:8080:8080 `
   ghcr.io/optuna/optuna-dashboard sqlite:///optuna.db
 ```
 
-Abre http://127.0.0.1:8080 y selecciona el estudio `wine-quality`.
+Abre http://127.0.0.1:8080 y selecciona `wine-quality`. El dashboard muestra el
+historial, los parámetros importantes, gráficos de relación y todos los trials.
 
-Al ejecutar `train.py` se:
+## Resultados
 
-1. Descargan y combinan los datos (tinto + blanco) desde la URL pública.
-2. Entrena la red con los hiperparámetros seleccionados y una capa
-   `keras.layers.Normalization` adaptada **dentro** del modelo.
-3. Serializa el modelo con el formato nativo (`model.save(...)`) **directamente en
-   `../app/model.keras`**, de modo que viaje con el contenedor de la aplicación.
-   Así `parte0/` se mantiene limpio (solo código, docs y archivos de Poetry).
-4. Verifica el *round-trip* recargándolo (`keras.models.load_model`) y prediciendo.
+La búsqueda utilizada para la entrega ejecutó 10 trials. El mejor trial obtuvo
+un MAE de validación de `0.5371`. El entrenamiento definitivo alcanzó un MAE de
+prueba de `0.551`.
 
-> El modelo es autocontenido: la normalización está incorporada al propio
-> modelo, por lo que la aplicación entrega los valores originales a `predict`.
+## Archivos generados
+
+| Ruta | Contenido | Se versiona en Git |
+| --- | --- | --- |
+| `../app/model.keras` | Modelo definitivo | No |
+| `mlflow.db` | Metadatos de MLflow | No |
+| `mlruns/` | Modelos de los trials | No |
+| `optuna.db` | Estudio de Optuna | No |
+
+## Solución de problemas
+
+### Poetry no está disponible
+
+Utiliza los comandos Docker anteriores. Si instalas Poetry, cierra y vuelve a
+abrir PowerShell antes de comprobar `poetry --version`.
+
+### MLflow abre sin runs
+
+Verifica que `mlflow.db` existe en el directorio actual. Ejecuta primero
+`optimize.py` si todavía no has creado la base.
+
+### El entrenamiento no descarga el dataset
+
+Comprueba la conexión a internet y el acceso a
+`archive.ics.uci.edu`. La aplicación dispone de estadísticas de respaldo, pero
+el entrenamiento necesita descargar los CSV.
+
+### TensorFlow tarda en importar
+
+La primera importación y la instalación de dependencias pueden tardar varios
+minutos. Docker reutiliza las capas descargadas en construcciones posteriores.

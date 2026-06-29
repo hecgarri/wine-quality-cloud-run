@@ -1,20 +1,77 @@
-# Evaluación Práctica 2
+# Predictor de calidad de vino
 
-Predictor de calidad de vino basado en Keras, presentado mediante Streamlit y
-empaquetado como una imagen Docker.
+Este proyecto entrena una red neuronal Keras para estimar la calidad de vinos
+tintos y blancos. Una aplicación Streamlit carga el modelo, recibe propiedades
+fisicoquímicas y presenta la predicción en una escala de 0 a 10.
 
-## Alcance
+La solución incluye entrenamiento reproducible, búsqueda de hiperparámetros con
+Optuna, seguimiento de experimentos con MLflow, ejecución con Docker y un script
+de despliegue para Google Cloud Run.
 
-La entrega conserva dos entornos Poetry independientes:
+## Arquitectura
 
-- `parte0/`: entrenamiento, optimización y serialización del modelo.
-- `app/`: inferencia mediante Streamlit y construcción de la imagen Docker.
+```text
+Wine Quality (UCI)
+        |
+        v
+parte0/train.py ------> app/model.keras
+        |                       |
+        |                       v
+        |                 app/app.py
+        |                       |
+        v                       v
+Optuna + MLflow          Docker / Cloud Run
+```
 
-Optuna y MLflow se utilizaron como herramientas complementarias vistas en
-clases. La bondad de ajuste no es el foco de la evaluación; el flujo obligatorio
-sigue siendo entrenar, serializar y ejecutar la aplicación sin errores.
+`parte0/` y `app/` mantienen entornos Poetry independientes. El modelo y las
+bases de experimentación se generan localmente y no se almacenan en Git.
 
-## Entrenar el modelo definitivo
+## Requisitos
+
+Necesitas las siguientes herramientas según el flujo que quieras ejecutar:
+
+- Docker Desktop para la aplicación, MLflow y Optuna Dashboard.
+- Python 3.12 y Poetry para ejecutar el código directamente en Windows.
+- Google Cloud CLI para desplegar en Cloud Run.
+
+Comprueba las herramientas disponibles desde PowerShell:
+
+```powershell
+docker --version
+python --version
+poetry --version
+gcloud.cmd --version
+```
+
+Si PowerShell no reconoce `poetry`, puedes instalarlo siguiendo la
+[documentación oficial de Poetry](https://python-poetry.org/docs/#installation)
+o utilizar las alternativas Docker de este README.
+
+## Inicio rápido con Docker
+
+El repositorio no incluye `app/model.keras`. Genera primero el modelo desde la
+raíz del repositorio:
+
+```powershell
+docker run --rm `
+  -v "${PWD}:/workspace" -w /workspace/parte0 `
+  python:3.12-slim `
+  sh -c "pip install --quiet poetry && poetry config virtualenvs.create false && poetry install --no-interaction --no-ansi --no-root && poetry run python train.py"
+```
+
+Después construye y ejecuta la aplicación:
+
+```powershell
+cd app
+docker build -t wine-quality-app .
+docker run --rm --name wine-quality-app -p 8501:8501 wine-quality-app
+```
+
+Abre http://127.0.0.1:8501. Detén la aplicación con `Ctrl+C`.
+
+## Entrenamiento con Poetry
+
+Ejecuta estos comandos desde la raíz:
 
 ```powershell
 cd parte0
@@ -22,45 +79,65 @@ poetry install
 poetry run python train.py
 ```
 
-El comando descarga Wine Quality desde UCI y genera `app/model.keras`. Este
-archivo es necesario para Docker y para Cloud Run, pero se mantiene fuera de Git.
+El script descarga el dataset, entrena el modelo, evalúa el conjunto de prueba y
+escribe `app/model.keras`. Consulta [parte0/README.md](parte0/README.md) para
+conocer la arquitectura, la partición de datos y los resultados obtenidos.
 
-## Ejecutar la optimización
+## Optimización con Optuna y MLflow
+
+La optimización es complementaria al enunciado. Optuna busca hiperparámetros y
+MLflow registra cada trial con sus parámetros, métricas y modelo.
+
+Con Poetry, ejecuta desde `parte0/`:
 
 ```powershell
-cd parte0
 poetry install
 poetry run python optimize.py --trials 10
 ```
 
-Optuna persiste el estudio `wine-quality` en `optuna.db`. MLflow registra cada
-trial en el experimento `wine-quality-optuna`, incluyendo hiperparámetros,
-`val_mae`, `val_loss`, número de épocas y el modelo resultante.
-
-La búsqueda utilizada para el modelo entregado ejecutó 10 trials. El mejor
-obtuvo un MAE de validación de `0.5371`; el modelo definitivo obtuvo un MAE de
-prueba de `0.551`.
-
-## Explorar los experimentos con MLflow
-
-Después de ejecutar `optimize.py`, inicia el servidor desde `parte0/`:
+Sin Poetry, ejecuta desde `parte0/`:
 
 ```powershell
-poetry run mlflow server --backend-store-uri sqlite:///mlflow.db --host 127.0.0.1 --port 5000
+docker run --rm `
+  -v "${PWD}:/experiment" -w /experiment `
+  python:3.12-slim `
+  sh -c "pip install --quiet poetry && poetry config virtualenvs.create false && poetry install --no-interaction --no-ansi --no-root && poetry run python optimize.py --trials 10"
 ```
 
-Abre http://127.0.0.1:5000, selecciona `wine-quality-optuna` y:
+El proceso genera:
+
+- `optuna.db`: estudio `wine-quality`.
+- `mlflow.db`: metadatos del experimento `wine-quality-optuna`.
+- `mlruns/`: modelos producidos por los trials.
+
+## Explorar MLflow sin Poetry
+
+El siguiente comando funciona con los experimentos existentes en `parte0/`.
+Ejecuta el comando desde esa carpeta:
+
+```powershell
+docker run --rm -p 127.0.0.1:5000:5000 `
+  -v "${PWD}:/experiment" -w /experiment `
+  ghcr.io/mlflow/mlflow:v3.14.0 `
+  mlflow server `
+  --backend-store-uri sqlite:////experiment/mlflow.db `
+  --default-artifact-root file:///experiment/mlruns `
+  --host 0.0.0.0 --port 5000
+```
+
+Abre http://127.0.0.1:5000 y selecciona `wine-quality-optuna`.
 
 1. Ordena los runs por `val_mae` ascendente.
 2. Selecciona varios trials y usa **Compare**.
-3. Compara `learning_rate`, `units_1`, `units_2`, `dropout`, `l2` y
+3. Contrasta `learning_rate`, `units_1`, `units_2`, `dropout`, `l2` y
    `batch_size`.
-4. Revisa `val_mae`, `val_loss`, `epochs_ran` y el artefacto
-   `model/model.keras`.
+4. Revisa `val_mae`, `val_loss`, `epochs_ran` y `model/model.keras`.
 
-## Explorar el estudio de Optuna
+Detén MLflow con `Ctrl+C`. Docker elimina el contenedor automáticamente.
 
-Desde `parte0/`, abre la base SQLite con la imagen oficial de Optuna Dashboard:
+## Explorar Optuna
+
+Ejecuta Optuna Dashboard desde `parte0/`:
 
 ```powershell
 docker run --rm -p 127.0.0.1:8080:8080 `
@@ -68,56 +145,88 @@ docker run --rm -p 127.0.0.1:8080:8080 `
   ghcr.io/optuna/optuna-dashboard sqlite:///optuna.db
 ```
 
-Abre http://127.0.0.1:8080 y selecciona `wine-quality`. El dashboard permite
-revisar el historial de optimización, la importancia de los hiperparámetros, las
-relaciones entre parámetros y la tabla completa de trials.
+Abre http://127.0.0.1:8080 y selecciona `wine-quality`. Revisa el historial, la
+importancia de hiperparámetros, las relaciones entre parámetros y la tabla de
+trials. Detén el dashboard con `Ctrl+C`.
 
-`mlflow.db`, `optuna.db` y `mlruns/` son artefactos locales de experimentación y
-no se versionan en Git.
+## Resultados registrados
 
-## Ejecutar Streamlit con Docker
+La búsqueda ejecutó 10 trials. El mejor trial alcanzó un MAE de validación de
+`0.5371`. El modelo definitivo obtuvo un MAE de prueba de `0.551`.
 
-```powershell
-cd app
-docker build -t hector-garrido .
-docker run --rm -p 8501:8501 hector-garrido
-```
+Estos valores documentan la ejecución realizada, pero la bondad de ajuste no es
+el foco principal de la evaluación.
 
-La aplicación queda disponible en http://localhost:8501.
+## Despliegue en Cloud Run
 
-## Desplegar en Cloud Run
+El script [deploy-cloud-run.ps1](deploy-cloud-run.ps1) mantiene el modelo fuera
+de Git y lo publica en una ruta GCS identificada por su SHA-256. Cloud Build
+incorpora esa versión en una imagen almacenada en Artifact Registry.
 
-Requisitos:
-
-- Google Cloud CLI autenticado.
-- Un proyecto seleccionado mediante `gcloud config set project`.
-- `app/model.keras` generado localmente.
-
-Valida el despliegue sin crear recursos:
+Valida primero el despliegue sin crear recursos:
 
 ```powershell
 .\deploy-cloud-run.ps1 -DryRun
 ```
 
-Ejecuta el despliegue:
+Después ejecuta el despliegue real:
 
 ```powershell
 .\deploy-cloud-run.ps1
 ```
 
-El script utiliza el proyecto activo y, por defecto:
+La configuración predeterminada despliega `wine-quality-predictor` en
+`us-central1`, permite acceso público y configura mínimo cero y máximo una
+instancia.
 
-- publica el modelo en `gs://<project-id>-ml-models/wine-quality/<sha256>/`;
-- construye la imagen con Cloud Build;
-- almacena versiones en Artifact Registry;
-- despliega `wine-quality-predictor` en `us-central1`;
-- permite acceso público;
-- configura facturación por solicitud, mínimo cero y máximo una instancia.
+## Archivos generados e ignorados
 
-Los valores se pueden reemplazar mediante los parámetros `ProjectId`, `Region`,
-`ServiceName`, `ArtifactRepository`, `ImageName`, `ModelBucket` y `ModelPath`.
+Git ignora los siguientes artefactos:
 
-## Estructura principal
+```text
+app/model.keras
+parte0/mlflow.db
+parte0/optuna.db
+parte0/mlruns/
+entrega.zip
+__pycache__/
+```
+
+`entrega.zip` conserva el modelo porque el enunciado exige incluirlo, aunque el
+repositorio Git no lo versiona.
+
+## Solución de problemas
+
+### PowerShell no reconoce Poetry
+
+Usa los comandos Docker anteriores o instala Poetry y abre una terminal nueva.
+Comprueba después la instalación con `poetry --version`.
+
+### Falta `app/model.keras`
+
+Ejecuta `parte0/train.py` con Poetry o utiliza el comando Docker de inicio
+rápido. Docker no puede construir la aplicación sin ese archivo.
+
+### El puerto ya está ocupado
+
+Identifica y detén el contenedor anterior:
+
+```powershell
+docker ps
+docker stop wine-quality-app
+```
+
+### MLflow no muestra experimentos
+
+Comprueba que ejecutas el comando desde `parte0/` y que existe `mlflow.db`:
+
+```powershell
+Get-Item .\mlflow.db
+```
+
+Si el archivo no existe, ejecuta primero `optimize.py`.
+
+## Estructura
 
 ```text
 .
