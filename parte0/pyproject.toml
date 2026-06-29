@@ -1,0 +1,24 @@
+[project]
+name = "parte0-wine"
+version = "0.1.0"
+description = "Parte 0 - Entrenamiento y serializacion de un modelo Keras (Wine Quality, UCI)"
+authors = [
+    {name = "Hector Garrido Henriquez", email = "hectorgarridohenriquez@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "tensorflow-cpu (==2.18.0) ; sys_platform != 'win32'",
+    "tensorflow-intel (==2.18.0) ; sys_platform == 'win32'",
+    "pandas (>=2.0.0,<3.0.0)",
+    "numpy (>=1.26.0,<2.1.0)",
+    "optuna (>=4.0.0,<5.0.0)",
+    "mlflow (>=3.14.0,<4.0.0)"
+]
+
+[tool.poetry]
+package-mode = false
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

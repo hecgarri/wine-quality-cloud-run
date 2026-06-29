@@ -1,0 +1,23 @@
+[project]
+name = "app-wine"
+version = "0.1.0"
+description = "Parte 1 - App Streamlit que predice la calidad de un vino (modelo Keras)"
+authors = [
+    {name = "Hector Garrido Henriquez", email = "hectorgarridohenriquez@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "streamlit (>=1.58.0,<2.0.0)",
+    "tensorflow-cpu (==2.18.0) ; sys_platform != 'win32'",
+    "tensorflow-intel (==2.18.0) ; sys_platform == 'win32'",
+    "pandas (>=2.0.0,<3.0.0)",
+    "numpy (>=1.26.0,<2.1.0)"
+]
+
+[tool.poetry]
+package-mode = false
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
