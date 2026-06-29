@@ -8,7 +8,40 @@ La solución incluye entrenamiento reproducible, búsqueda de hiperparámetros c
 Optuna, seguimiento de experimentos con MLflow, ejecución con Docker y un script
 de despliegue para Google Cloud Run.
 
-## Arquitectura
+## Qué enseña este proyecto
+
+El repositorio muestra el recorrido completo de un modelo de machine learning,
+no solamente su entrenamiento. Al terminar el recorrido puedes identificar qué
+herramienta responde cada pregunta:
+
+- ¿Cómo se preparan los datos y se entrena una red neuronal?
+- ¿Cómo se repite el entrenamiento con las mismas dependencias?
+- ¿Cómo se comparan configuraciones sin perder resultados anteriores?
+- ¿Cómo se convierte un modelo en una aplicación web?
+- ¿Cómo se empaqueta la aplicación para ejecutarla en otro computador?
+- ¿Cómo se versionan por separado el código, el modelo y la imagen desplegable?
+- ¿Cómo se publica la aplicación sin mantener un servidor encendido?
+
+## Modelo mental: cinco tipos de objetos
+
+Un proyecto de machine learning produce varios objetos con ciclos de vida
+distintos. Confundirlos suele llevar a repositorios pesados o despliegues poco
+reproducibles.
+
+| Objeto | Ejemplo en este proyecto | Sistema responsable |
+| --- | --- | --- |
+| Código fuente | `train.py`, `app.py` | Git y GitHub |
+| Definición del entorno | `pyproject.toml`, `poetry.lock` | Poetry |
+| Historial experimental | trials, parámetros y métricas | Optuna y MLflow |
+| Modelo entrenado | `model.keras` | Cloud Storage |
+| Aplicación empaquetada | imagen Docker | Artifact Registry |
+| Aplicación en ejecución | servicio web público | Cloud Run |
+
+Git conserva archivos de texto y su historial. Cloud Storage conserva el modelo
+binario. Artifact Registry conserva las imágenes Docker. Cloud Run ejecuta una
+versión concreta de esas imágenes.
+
+## Flujo de extremo a extremo
 
 ```text
 Wine Quality (UCI)
@@ -23,8 +56,197 @@ parte0/train.py ------> app/model.keras
 Optuna + MLflow          Docker / Cloud Run
 ```
 
+El flujo sigue estos pasos:
+
+1. Pandas descarga y combina los CSV de UCI.
+2. NumPy transforma las columnas en matrices numéricas.
+3. Keras define la red y TensorFlow ejecuta el entrenamiento.
+4. Optuna prueba combinaciones de hiperparámetros.
+5. MLflow conserva los parámetros, métricas y modelos de cada trial.
+6. `train.py` fija la configuración seleccionada y crea `model.keras`.
+7. Streamlit carga el modelo y construye la interfaz de predicción.
+8. Docker empaqueta código, dependencias y modelo en una imagen.
+9. Cloud Storage conserva el modelo mediante una ruta identificada por SHA-256.
+10. Cloud Build construye la imagen en Google Cloud.
+11. Artifact Registry conserva cada versión de la imagen.
+12. Cloud Run crea una revisión y atiende solicitudes HTTP.
+
 `parte0/` y `app/` mantienen entornos Poetry independientes. El modelo y las
 bases de experimentación se generan localmente y no se almacenan en Git.
+
+## Herramientas y responsabilidades
+
+### Pandas y NumPy: preparar datos tabulares
+
+[Pandas](https://pandas.pydata.org/docs/) representa los CSV como tablas con
+columnas nombradas. `train.py` lo usa para descargar los vinos tintos y blancos,
+añadir el tipo de vino y seleccionar las variables de entrada.
+
+[NumPy](https://numpy.org/doc/) representa los datos como matrices numéricas que
+TensorFlow puede procesar eficientemente. También genera la permutación
+reproducible que divide los datos en entrenamiento, validación y prueba.
+
+Ambas herramientas aparecen en `parte0/train.py`. La aplicación también usa
+Pandas para construir una fila con el mismo orden de variables que espera el
+modelo.
+
+### TensorFlow y Keras: definir y entrenar la red
+
+[TensorFlow](https://www.tensorflow.org/) es el motor de cálculo numérico. Se
+encarga de tensores, derivación automática, optimización y ejecución de las
+operaciones que actualizan los pesos de la red.
+
+[Keras](https://keras.io/) es la API de alto nivel utilizada para describir la
+arquitectura. El proyecto crea una secuencia de capas de normalización, capas
+densas, dropout y una salida lineal. Keras también proporciona `fit`,
+`EarlyStopping`, `evaluate`, `save` y `load_model`.
+
+La separación es conceptual: Keras expresa qué red quieres entrenar y
+TensorFlow realiza el cálculo necesario. El resultado es `app/model.keras`, un
+archivo que contiene arquitectura, pesos y normalización.
+
+### Poetry: reproducir el entorno de Python
+
+[Poetry](https://python-poetry.org/docs/) administra dependencias y entornos de
+Python. `pyproject.toml` declara rangos y condiciones de plataforma;
+`poetry.lock` fija las versiones exactas resueltas.
+
+El proyecto mantiene dos entornos porque entrenamiento e inferencia tienen
+responsabilidades diferentes:
+
+- `parte0/` instala TensorFlow, Pandas, NumPy, Optuna y MLflow.
+- `app/` instala TensorFlow CPU, Pandas, NumPy y Streamlit.
+
+Esta separación evita que Docker instale herramientas experimentales que la
+aplicación no necesita. `poetry install` reconstruye el entorno y `poetry run`
+ejecuta un comando dentro de ese contexto.
+
+### Optuna: buscar hiperparámetros
+
+[Optuna](https://optuna.readthedocs.io/) automatiza la búsqueda de decisiones
+que el entrenamiento no aprende por sí solo. En este proyecto explora tamaños de
+capas, learning rate, dropout, regularización L2 y batch size.
+
+Un **trial** es una ejecución con una combinación concreta. El **objective**
+entrena el modelo y devuelve el MAE de validación. El **study** agrupa todos los
+trials y conoce cuál obtuvo el menor error.
+
+`parte0/optimize.py` conserva el estudio en `optuna.db`. Optuna responde qué
+configuración conviene probar o seleccionar, pero no sustituye el entrenamiento
+final ni el conjunto de prueba.
+
+### MLflow: conservar evidencia experimental
+
+[MLflow Tracking](https://mlflow.org/docs/latest/ml/tracking/) registra lo que
+ocurre dentro de cada trial. Un **experiment** agrupa ejecuciones relacionadas y
+un **run** contiene parámetros, métricas, etiquetas y artefactos.
+
+El proyecto registra en `wine-quality-optuna`:
+
+- los hiperparámetros propuestos por Optuna;
+- `val_mae` y `val_loss`;
+- el número de épocas ejecutadas;
+- el archivo `model.keras` producido por el trial.
+
+Optuna decide qué configuración evaluar; MLflow permite auditar y comparar lo
+que ocurrió. `mlflow.db` guarda metadatos y `mlruns/` guarda artefactos. Ninguno
+de esos archivos se publica en Git.
+
+### Streamlit: convertir Python en una interfaz web
+
+[Streamlit](https://docs.streamlit.io/) permite construir una aplicación web
+con código Python. `app/app.py` crea selectores, sliders, textos y el botón que
+invoca `model.predict`.
+
+Streamlit vuelve a ejecutar el script cuando cambia un control. Por eso el
+proyecto usa dos cachés:
+
+- `st.cache_resource` mantiene una sola instancia del modelo cargado.
+- `st.cache_data` conserva las estadísticas calculadas desde el dataset.
+
+La aplicación no entrena. Solamente carga un modelo existente, valida el orden
+de las 12 entradas y presenta una predicción comprensible.
+
+### Docker: empaquetar una ejecución reproducible
+
+[Docker](https://docs.docker.com/get-started/docker-concepts/) construye una
+imagen a partir de `app/Dockerfile`. La imagen incluye Python 3.12, Poetry,
+dependencias, `app.py` y una versión concreta de `model.keras`.
+
+Una **imagen** es una plantilla inmutable. Un **contenedor** es un proceso creado
+desde esa imagen. `docker build` crea la imagen y `docker run` inicia el
+contenedor.
+
+El puerto `8501` conecta el navegador del host con Streamlit dentro del
+contenedor. La dirección interna `0.0.0.0` permite que Docker y Cloud Run envíen
+tráfico al proceso.
+
+### Git y GitHub: versionar el código
+
+[Git](https://git-scm.com/doc) registra cambios locales mediante commits.
+[GitHub](https://docs.github.com/) almacena el repositorio remoto y permite
+compartir su historial.
+
+El modelo no se guarda en Git porque es un artefacto binario derivado del
+entrenamiento. El repositorio conserva el código y las versiones de dependencias
+necesarias para regenerarlo. `.gitignore` evita publicar modelos, bases SQLite,
+cachés y credenciales.
+
+### Cloud Storage: versionar el modelo
+
+[Cloud Storage](https://cloud.google.com/storage/docs) almacena objetos binarios.
+`deploy-cloud-run.ps1` calcula el SHA-256 del modelo y utiliza una ruta como:
+
+```text
+gs://<bucket>/wine-quality/<sha256>/model.keras
+```
+
+El hash identifica exactamente el contenido. Dos modelos distintos producen
+rutas distintas y una ejecución repetida con el mismo modelo reutiliza la misma
+ruta. Esta estrategia evita depender de un nombre mutable como `latest`.
+
+### Cloud Build: construir dentro de Google Cloud
+
+[Cloud Build](https://cloud.google.com/build/docs/overview) ejecuta la
+construcción Docker en infraestructura administrada. El script prepara un
+contexto temporal, descarga desde GCS la versión exacta del modelo y envía ese
+contexto al servicio.
+
+La construcción remota evita depender de la imagen que exista en el computador
+del desarrollador. Su salida es una imagen Docker etiquetada con fecha y hash del
+modelo.
+
+### Artifact Registry: conservar imágenes Docker
+
+[Artifact Registry](https://cloud.google.com/artifact-registry/docs/overview)
+almacena la salida de Cloud Build. Cada imagen tiene un tag legible y un digest
+SHA-256 inmutable.
+
+Cloud Storage versiona el modelo como artefacto de machine learning. Artifact
+Registry versiona la aplicación completa, que incluye código, entorno y una
+copia de ese modelo.
+
+### Cloud Run: ejecutar la aplicación bajo demanda
+
+[Cloud Run](https://cloud.google.com/run/docs/overview/what-is-cloud-run)
+ejecuta contenedores que atienden solicitudes HTTP. Cada despliegue crea una
+revisión inmutable asociada a una imagen de Artifact Registry.
+
+El script configura acceso público, facturación por solicitud, mínimo cero y
+máximo una instancia. Con mínimo cero, Cloud Run puede apagar la instancia cuando
+no recibe tráfico; la siguiente solicitud puede experimentar un arranque en frío.
+
+Cloud Run no entrena ni modifica el modelo. Solamente inicia la imagen y dirige
+solicitudes a Streamlit en el puerto `8501`.
+
+### Google Cloud CLI: coordinar los servicios
+
+[Google Cloud CLI](https://cloud.google.com/sdk/gcloud) proporciona el comando
+`gcloud`. `deploy-cloud-run.ps1` lo usa para habilitar APIs, crear repositorios,
+copiar el modelo, ejecutar Cloud Build y desplegar Cloud Run.
+
+El parámetro `-DryRun` valida rutas, proyecto, hash y nombres sin crear recursos.
+El despliegue real utiliza la cuenta autenticada y el proyecto activo.
 
 ## Requisitos
 
